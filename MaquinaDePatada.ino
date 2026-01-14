@@ -4,6 +4,7 @@
 // --- Configuración de Hardware ---
 #define PIN_S1 26 // Sensor de inicio (ranura 1)
 #define PIN_S2 25 // Sensor de fin (ranura 2)
+#define PIN_COIN 14 // Sensor de monedas (Infrarrojo)
 #define BTNConfig 4 //boton para entrar en configuracion 
 #define BTNUp 12 //boton para aumentar o subir
 #define BTNDown 13 // boton para disminuir o bajar
@@ -12,6 +13,12 @@
 const float DISTANCIA_M = 0.12;       // 12 cm convertidos a metros
 float factorDificultad = 1.0;         // Ajustable (1.0 = normal)
 const unsigned long TIMEOUT_MS = 2000; // Tiempo máximo entre sensores (2 seg)
+
+// --- Variables de Juego ---
+int monedasParaJugar = 1;     // Cantidad de monedas para activar
+int tirosPorCredito = 3;      // Cantidad de tiros por juego
+volatile int monedasInsertadas = 0;
+volatile int tirosRestantes = 0;
 
 // --- Variables de Tiempo (Volatile para Interrupciones) ---
 volatile unsigned long t1 = 0;
@@ -28,7 +35,7 @@ float Podio[3];
 
 // --- ISR: Interrupción Sensor 1 ---
 void IRAM_ATTR isr_inicio() {
-  if (!calculando) {
+  if (tirosRestantes > 0 && !calculando) {
     Serial.printf("S1 cortado");
     t1 = micros();
     t2 = 0;
@@ -38,9 +45,18 @@ void IRAM_ATTR isr_inicio() {
 
 // --- ISR: Interrupción Sensor 2 ---
 void IRAM_ATTR isr_fin() {
-  if (calculando && t2 == 0) {
+  if (tirosRestantes > 0 && calculando && t2 == 0) {
     Serial.printf("S2 cortado");
     t2 = micros();
+  }
+}
+
+// --- ISR: Interrupción Sensor Moneda ---
+void IRAM_ATTR isr_coin() {
+  static unsigned long last_coin_time = 0;
+  if (millis() - last_coin_time > 300) { // Debounce aumentado a 300ms para switch manual
+    monedasInsertadas++;
+    last_coin_time = millis();
   }
 }
 
@@ -107,6 +123,48 @@ void Configurar(){
 
   delay(100);
 
+  // --- Configurar Monedas para Jugar ---
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Monedas x Juego");
+  delay(500);
+
+  while (digitalRead(BTNConfig) == HIGH) {
+      lcd.setCursor(0,1);
+      lcd.print("   ");
+      lcd.setCursor(0,1);
+      lcd.print(monedasParaJugar);
+      
+      if (leerBotonConDebounce(BTNUp)) monedasParaJugar++;
+      if (leerBotonConDebounce(BTNDown) && monedasParaJugar > 1) monedasParaJugar--;
+      delay(50);
+  }
+  while(digitalRead(BTNConfig) == LOW) { delay(20); }
+  delay(100);
+
+  // --- Configurar Tiros por Credito ---
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Tiros x Credito");
+  delay(500);
+
+  while (digitalRead(BTNConfig) == HIGH) {
+      lcd.setCursor(0,1);
+      lcd.print("   ");
+      lcd.setCursor(0,1);
+      lcd.print(tirosPorCredito);
+      
+      if (leerBotonConDebounce(BTNUp)) tirosPorCredito++;
+      if (leerBotonConDebounce(BTNDown) && tirosPorCredito > 1) tirosPorCredito--;
+      delay(50);
+  }
+  while(digitalRead(BTNConfig) == LOW) { delay(20); }
+  delay(100);
+
+  lcd.clear();
+  lcd.print("Guardado!");
+  delay(1000);
+
   return;
 }
 
@@ -120,16 +178,58 @@ void setup() {
   pinMode(BTNConfig, INPUT_PULLUP);
   pinMode(BTNUp, INPUT_PULLUP);
   pinMode(BTNDown, INPUT_PULLUP);
+  pinMode(PIN_COIN, INPUT_PULLUP);
 
   // Interrupción en FALLING (cuando la aleta entra en la ranura y corta la luz)
   attachInterrupt(digitalPinToInterrupt(PIN_S1), isr_inicio, FALLING);
   attachInterrupt(digitalPinToInterrupt(PIN_S2), isr_fin, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_COIN), isr_coin, FALLING);
 
   Serial.println(">>> SISTEMA DE PATADA LISTO <<<");
   Serial.printf("Configuración: Distancia %.2f m | Esperando impacto...\n", DISTANCIA_M);
 }
 
 void loop() {
+  
+  // 0. Verificar Créditos
+  if (tirosRestantes <= 0) {
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("INSERTE MONEDA");
+    
+    while (monedasInsertadas < monedasParaJugar) {
+      lcd.setCursor(0,1);
+      lcd.printf("Cred: %d/%d   ", monedasInsertadas, monedasParaJugar);
+      
+      if (digitalRead(BTNConfig) == LOW) {
+        Configurar();
+        lcd.clear();
+        lcd.setCursor(0,0);
+        lcd.print("INSERTE MONEDA");
+      }
+      delay(100);
+    }
+
+    // Iniciar Juego
+    // Reiniciamos a 0 en lugar de restar. 
+    // Esto descarta creditos extra por rebote del switch y obliga a insertar moneda nuevamente.
+    monedasInsertadas = 0;
+    tirosRestantes = tirosPorCredito;
+    
+    // Limpiar variables por seguridad para evitar "patadas fantasma"
+    calculando = false;
+    t1 = 0;
+    t2 = 0;
+
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("PUEDE PATEAR!");
+    lcd.setCursor(0,1);
+    lcd.printf("Tiros: %d", tirosRestantes);
+    delay(2000);
+    lcd.clear();
+    Serial.println("Juego iniciado. Esperando patada...");
+  }
   
   // 1. Verificar si se completó el recorrido
   if (calculando && t2 > 0) {
@@ -170,11 +270,24 @@ void loop() {
     }
     Serial.println("-----------------");
 
+    tirosRestantes--; // Descontar tiro
+
     delay(3000); // Pausa para mostrar el puntaje
     
     // Resetear variables
     t1 = 0; t2 = 0;
     calculando = false;
+    
+    lcd.clear();
+    if (tirosRestantes > 0) {
+        lcd.setCursor(0,0);
+        lcd.print("PATEA OTRA VEZ");
+        lcd.setCursor(0,1);
+        lcd.printf("Restan: %d", tirosRestantes);
+    } else {
+        lcd.setCursor(0,0);
+        lcd.print("GAME OVER");
+    }
     Serial.println("\nEsperando siguiente patada...");
   }
 
