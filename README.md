@@ -6,7 +6,7 @@ Este proyecto consiste en un sistema de medición de velocidad y gestión de pun
 
 ## 🚀 Características
 
-* **Detección Inteligente de Giro:** Lógica diseñada para ignorar el primer corte del sensor (cuando la bolsa baja) y medir con precisión el segundo corte (impacto de regreso).
+* **Detección Inteligente de Giro:** Lógica diseñada para ignorar el primer corte del sensor (cuando la pelota baja) y medir con precisión el segundo corte (impacto de regreso).
 * **Interfaz Visual Dinámica:** Dos pantallas compuestas por 4 matrices LED RGB (NeoPixel) cada una, con cambio de color según el puntaje (Verde 🟢, Amarillo 🟡, Rojo 🔴).
 * **Menú de Configuración Integrado:** Interfaz mediante LCD 16x2 y 3 botones para ajustar el factor de dificultad sin necesidad de reprogramar.
 * **Memoria No Volátil:** Los ajustes de dificultad se guardan permanentemente en el ESP32 mediante la librería `Preferences`.
@@ -17,7 +17,7 @@ Este proyecto consiste en un sistema de medición de velocidad y gestión de pun
 * **Pantallas de Puntaje:** 2 Tiras de 4 matrices NeoPixel 8x8 (64 píxeles por matriz).
 * **Pantalla de Ajuste:** LCD 16x2 con adaptador I2C.
 * **Sensor:** Sensor óptico de herradura (original de la máquina).
-* **Entradas:** 3 Pulsadores (Menú, Arriba, Abajo). 
+* **Entradas:** 3 Pulsadores (Menú, Arriba, Abajo). Usar pines con pull up interno o soldar resistencias externas. 
 
 ## 📋 Conexiones (Pinout)
 
