@@ -1,1 +1,64 @@
-🥊 Arcade Kick Machine - Dual Player Score SystemEste proyecto consiste en un sistema de medición de fuerza y puntaje para una máquina de patadas de arcade. El sistema se "intercepta" a la señal del sensor original (opto-acoplador de herradura) para calcular la velocidad de la aleta al pasar y mostrar el puntaje en dos pantallas de matrices LED RGB (NeoPixel).🚀 CaracterísticasModo Dual (P1 vs P2): Alternancia automática de turnos tras cada impacto.Cálculo de Velocidad Real: Mide el tiempo en microsegundos que tarda la aleta en atravesar el sensor.Filtrado de Señal: Lógica inteligente para ignorar el primer corte (ida) y medir solo el segundo (regreso/golpe).Configuración en Vivo: Menú mediante LCD 16x2 y 3 botones para ajustar el factor de dificultad (sensibilidad).Feedback Visual: Pantallas NeoPixel que muestran el número de jugador y el puntaje con cambio de colores según la potencia (Verde -> Amarillo -> Rojo).🛠️ Hardware UtilizadoControlador: ESP32 (recomendado por el uso de Preferences.h).Displays: 2 Tiras de NeoPixels (8 matrices de 8x8 en total, 4 por jugador).Interfaz: LCD 16x2 con adaptador I2C.Entradas: 3 Botones (Config, Up, Down) y 1 Sensor Óptico (interrupción en Pin 26).📋 Conexiones (Pinout)ComponentePin ESP32DescripciónSensor (S1)26Entrada del sensor de la máquina (Pull-up)NeoPixel P127Tira LED Jugador 1NeoPixel P225Tira LED Jugador 2BTN Config12Botón de Menú/GuardarBTN Up13Botón para subir dificultadBTN Down14Botón para bajar dificultadLCD I2CSDA/SCLPines estándar I2C del ESP32🕹️ Funcionamiento de la LógicaEl código utiliza una Interrupción (ISR) para capturar el tiempo exacto de paso de la aleta:Ignorar Ida: El sistema detecta cuando la pelota baja (primer corte) y lo ignora.Captura de Impacto: Cuando la aleta regresa tras la patada, mide el tiempo de obstrucción del sensor.Cálculo: $$Puntaje = \frac{(Ancho\_Aleta / Tiempo) \times 100}{Factor\_Dificultad}$$Almacenamiento: El factor de dificultad se guarda en la memoria no volátil (NVS) del ESP32 usando la librería Preferences.🛠️ Instalación y LibreríasNecesitarás instalar las siguientes librerías en tu IDE de Arduino:Adafruit_NeoPixelLiquidCrystal_I2CPreferences (Incluida en el core de ESP32)🔧 PersonalizaciónPara ajustar el sistema a tu máquina específica, puedes modificar estas constantes en el código:ANCHO_ALETA_M: El ancho físico (en metros) de la pieza que pasa por el sensor.TIMEOUT_MS: Tiempo máximo de espera antes de cancelar una lectura errónea.BRIGHTNESS: Intensidad de los LEDs (0-255).Nota de seguridad: Al conectarte a la señal de una máquina existente, asegúrate de compartir la tierra (GND) entre el ESP32 y la máquina, y verifica que el voltaje del sensor no exceda los 3.3V del ESP32 (usa un divisor de tensión o un optoacoplador si es necesario).
+# 🥊 Arcade Kick Machine - Score Keeper System
+
+Este proyecto consiste en un sistema de medición de fuerza y gestión de puntajes para una máquina de patadas (tipo Boxer) de arcade. El sistema intercepta la señal del sensor original de la máquina para calcular la velocidad de impacto y mostrar los resultados en tiempo real a través de una interfaz visual de alto impacto.
+
+
+
+## 🚀 Características
+
+* **Sistema de Doble Jugador (P1 vs P2):** Alternancia automática de turnos tras cada golpe válido.
+* **Detección Inteligente de Giro:** Lógica diseñada para ignorar el primer corte del sensor (cuando la bolsa baja) y medir con precisión el segundo corte (impacto de regreso).
+* **Interfaz Visual Dinámica:** Dos pantallas compuestas por 4 matrices LED RGB (NeoPixel) cada una, con cambio de color según el puntaje (Verde 🟢, Amarillo 🟡, Rojo 🔴).
+* **Menú de Configuración Integrado:** Interfaz mediante LCD 16x2 y 3 botones para ajustar el factor de dificultad sin necesidad de reprogramar.
+* **Memoria No Volátil:** Los ajustes de dificultad se guardan permanentemente en el ESP32 mediante la librería `Preferences`.
+
+## 🛠️ Hardware Requerido
+
+* **Microcontrolador:** ESP32 (38 pines).
+* **Pantallas de Puntaje:** 2 Tiras de 4 matrices NeoPixel 8x8 (64 píxeles por matriz).
+* **Pantalla de Ajuste:** LCD 16x2 con adaptador I2C.
+* **Sensor:** Sensor óptico de herradura (original de la máquina).
+* **Entradas:** 3 Pulsadores (Menú, Arriba, Abajo).
+
+## 📋 Conexiones (Pinout)
+
+| Componente | Pin ESP32 | Función |
+| :--- | :--- | :--- |
+| **Sensor de Herradura** | GPIO 26 | Entrada de señal (con interrupción) |
+| **Matrices LED P1** | GPIO 27 | Datos NeoPixel Jugador 1 |
+| **Matrices LED P2** | GPIO 25 | Datos NeoPixel Jugador 2 |
+| **Botón Menú** | GPIO 12 | Navegación y Guardado |
+| **Botón Subir** | GPIO 13 | Aumentar dificultad |
+| **Botón Bajar** | GPIO 14 | Disminuir dificultad |
+| **LCD 16x2 SDA** | GPIO 21 | Comunicación I2C |
+| **LCD 16x2 SCL** | GPIO 22 | Comunicación I2C |
+
+
+
+## 🕹️ Lógica de Funcionamiento
+
+El cálculo se basa en el tiempo que la aleta física de la máquina obstruye el sensor óptico:
+
+1.  **Estado de Espera:** Ambos displays muestran `000`. El sistema espera el primer corte del sensor.
+2.  **Filtrado:** El código detecta el primer paso (ida) y activa una bandera.
+3.  **Captura de Microsegundos:** En el segundo paso (regreso), se activa el cronómetro mediante una interrupción de hardware (`isr_sensor`) para obtener la duración exacta del corte.
+4.  **Cálculo de Física:**
+    $$Velocidad = \frac{Ancho\ de\ la\ Aleta}{Tiempo\ de\ paso}$$
+    $$Puntaje = \frac{Velocidad \times 100}{Factor\ de\ Dificultad}$$
+5.  **Animación:** El puntaje sube de forma progresiva en los LEDs para dar un efecto arcade clásico.
+
+## 🔧 Configuración y Calibración
+
+Para entrar al modo de configuración, presiona el botón **BTNConfig**.
+* Utiliza los botones **Up** y **Down** para modificar el `factorDificultad`.
+* Un factor más bajo hará que sea más fácil llegar a 999.
+* Presiona **Config** nuevamente para guardar el valor en la memoria interna.
+
+## 📚 Librerías Utilizadas
+
+* `Adafruit_NeoPixel`: Control de las matrices RGB.
+* `LiquidCrystal_I2C`: Gestión de la pantalla LCD.
+* `Preferences`: Almacenamiento de datos en la memoria Flash del ESP32.
+
+---
+Proyecto desarrollado para control de máquinas arcade recreativas.
