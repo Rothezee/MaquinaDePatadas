@@ -1,6 +1,6 @@
 # 🥊 Arcade Kick Machine - Score Keeper System
 
-Este proyecto consiste en un sistema de medición de fuerza y gestión de puntajes para una máquina de patadas (tipo Boxer) de arcade. El sistema intercepta la señal del sensor original de la máquina para calcular la velocidad de impacto y mostrar los resultados en tiempo real a través de una interfaz visual de alto impacto.
+Este proyecto consiste en un sistema de medición de velocidad y gestión de puntajes para una máquina de patadas (tipo Boxer) de arcade. El sistema intercepta la señal del sensor original de la máquina para calcular la velocidad de impacto y mostrar los resultados en tiempo real a través de un diplay modular.
 
 
 
@@ -13,11 +13,11 @@ Este proyecto consiste en un sistema de medición de fuerza y gestión de puntaj
 
 ## 🛠️ Hardware Requerido
 
-* **Microcontrolador:** ESP32 (38 pines).
+* **Microcontrolador:** ESP32.
 * **Pantallas de Puntaje:** 2 Tiras de 4 matrices NeoPixel 8x8 (64 píxeles por matriz).
 * **Pantalla de Ajuste:** LCD 16x2 con adaptador I2C.
 * **Sensor:** Sensor óptico de herradura (original de la máquina).
-* **Entradas:** 3 Pulsadores (Menú, Arriba, Abajo).
+* **Entradas:** 3 Pulsadores (Menú, Arriba, Abajo). 
 
 ## 📋 Conexiones (Pinout)
 
@@ -60,4 +60,3 @@ Para entrar al modo de configuración, presiona el botón **BTNConfig**.
 * `Preferences`: Almacenamiento de datos en la memoria Flash del ESP32.
 
 ---
-Proyecto desarrollado para control de máquinas arcade recreativas.
