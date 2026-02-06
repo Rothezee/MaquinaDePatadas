@@ -7,11 +7,14 @@
 // CONFIGURACIÓN DE PINES
 // ==========================================
 #define PIN_S1          26   // Sensor Único
+
 #define PIN_NEO_P1      27   // Tira Jugador 1
 #define PIN_NEO_P2      25   // Tira Jugador 2
-#define BTNConfig       4    
-#define BTNUp           12   
-#define BTNDown         13   
+
+// ¡CAMBIO DE PINES! (34 y 35 no tienen PullUp, por eso fallaba)
+#define BTNConfig       12   // Botón Menú 35
+#define BTNUp           13   // Botón Subir 4
+#define BTNDown         14   // Botón Bajar 34
 
 // --- LUCES ---
 #define NUM_MATRICES      4
@@ -40,6 +43,15 @@ volatile unsigned long t_inicio = 0;
 volatile unsigned long t_fin = 0;
 volatile bool calculando = false;
 unsigned long tiempo_bloqueo_hasta = 0; 
+volatile bool sensor_detectado_debug = false;
+
+// ✅ NUEVO: Control de pasos del sensor
+volatile bool primerCorteIgnorado = false;
+volatile int contadorCortes = 0;
+
+// Últimos puntajes
+int ultimoPuntajeP1 = 0;
+int ultimoPuntajeP2 = 0;
 
 // ==========================================
 // FUNCIONES DE PANTALLA LED
@@ -75,49 +87,49 @@ void dibujarDigito(Adafruit_NeoPixel &tira, int num, int matrizPos, uint32_t col
 void actualizarPantalla(Adafruit_NeoPixel &tira, int numeroJugador, int puntaje, bool activo) {
   tira.clear();
   
-  // --- 1. DIBUJAR NÚMERO DE JUGADOR (Matriz 0) ---
+  // 1. DIBUJAR NÚMERO DE JUGADOR
   uint32_t colorJugador;
-  if (numeroJugador == 1) colorJugador = activo ? tira.Color(0,0,255) : 0;
-  else                    colorJugador = activo ? tira.Color(255,0,255) : 0;
-  
+  if (numeroJugador == 1) colorJugador = activo ? tira.Color(0,0,255) : tira.Color(0,0,50); // ✅ Azul tenue si inactivo
+  else                    colorJugador = activo ? tira.Color(255,0,255) : tira.Color(50,0,50); // ✅ Magenta tenue si inactivo
   dibujarDigito(tira, numeroJugador, 0, colorJugador);
 
-  // --- 2. DIBUJAR PUNTAJE (Matrices 1, 2, 3) ---
+  // 2. DIBUJAR PUNTAJE
   if (puntaje > 999) puntaje = 999;
   
-  // Descomponer dígitos
   int c = puntaje / 100;
   int d = (puntaje / 10) % 10;
   int u = puntaje % 10;
 
   uint32_t colorScore = 0;
 
-  // CASO A: Hay puntaje real (Colores fuertes)
+  // Determinar color base según puntaje
   if (puntaje > 0) {
       colorScore = (puntaje < 300) ? tira.Color(0,255,0) : 
                    (puntaje < 700) ? tira.Color(255,200,0) : tira.Color(255,0,0);
       
-      // Dibujamos normal (ocultando ceros a la izquierda si quieres, o mostrándolos)
-      // Aquí ocultamos ceros a la izquierda para puntajes reales (ej: " 85")
-      if(c > 0) dibujarDigito(tira, c, 1, colorScore);
-      if(c > 0 || d > 0) dibujarDigito(tira, d, 2, colorScore);
-      dibujarDigito(tira, u, 3, colorScore);
-  } 
-  // CASO B: Es turno activo pero puntaje 0 (MODO ESPERA 000)
-  else if (activo) {
-      colorScore = tira.Color(20, 20, 20); // Gris tenue
-      
-      // Forzamos dibujar 0 en las 3 posiciones
-      dibujarDigito(tira, 0, 1, colorScore);
-      dibujarDigito(tira, 0, 2, colorScore);
-      dibujarDigito(tira, 0, 3, colorScore);
+      // ✅ Si está inactivo, reducir brillo al 25%
+      if (!activo) {
+        uint8_t r = (colorScore >> 16) & 0xFF;
+        uint8_t g = (colorScore >> 8) & 0xFF;
+        uint8_t b = colorScore & 0xFF;
+        colorScore = tira.Color(r/4, g/4, b/4);
+      }
+  } else {
+      // ✅ ESTADO DEFAULT: "000" siempre visible (activo o inactivo)
+      colorScore = tira.Color(20, 20, 20); // Gris visible para ambos
   }
-  // CASO C: Inactivo y puntaje 0 -> Todo apagado (no hace nada)
-
+  
+  // Dibujar dígitos (SIEMPRE mostrar al menos "000")
+  if(c > 0) dibujarDigito(tira, c, 1, colorScore);
+  else      dibujarDigito(tira, 0, 1, colorScore); // ✅ Mostrar 0 explícitamente
+  
+  if(c > 0 || d > 0) dibujarDigito(tira, d, 2, colorScore);
+  else               dibujarDigito(tira, 0, 2, colorScore); // ✅ Mostrar 0 explícitamente
+  
+  dibujarDigito(tira, u, 3, colorScore); // Siempre mostrar unidades
   tira.show();
 }
 
-// Animación de subida
 void animarConteo(Adafruit_NeoPixel &tira, int numeroJugador, int puntajeFinal) {
   if (puntajeFinal == 0) return;
   int incremento = 1;
@@ -134,17 +146,38 @@ void animarConteo(Adafruit_NeoPixel &tira, int numeroJugador, int puntajeFinal) 
 }
 
 // ==========================================
-// INTERRUPCIÓN SENSOR
+// INTERRUPCIÓN SENSOR (LIMPIA)
+// ==========================================
+// ==========================================
+// INTERRUPCIÓN SENSOR (CON BLOQUEO DE PRIMER CORTE)
 // ==========================================
 void IRAM_ATTR isr_sensor() {
-  if (millis() < tiempo_bloqueo_hasta) return; // Anti-retorno
+  if (millis() < tiempo_bloqueo_hasta) return; 
 
   int estado = digitalRead(PIN_S1);
-  if (estado == LOW) { 
-    if (!calculando) { t_inicio = micros(); calculando = true; }
+  
+  if (estado == LOW) { // Objeto entra en ranura
+    contadorCortes++;
+    
+    // ✅ IGNORAR EL PRIMER CORTE (pelota yendo hacia el usuario)
+    if (contadorCortes == 1) {
+      primerCorteIgnorado = true;
+      sensor_detectado_debug = true; // Debug
+      Serial.println("Primer corte ignorado (ida)");
+      return; // ⛔ NO iniciar cronómetro
+    }
+    
+    // ✅ SEGUNDO CORTE EN ADELANTE (pelota regresando)
+    if (contadorCortes >= 2 && !calculando) { 
+      t_inicio = micros(); 
+      calculando = true; 
+      sensor_detectado_debug = true;
+    }
   } 
-  else { 
-    if (calculando && t_inicio > 0) t_fin = micros();
+  else { // Objeto sale de ranura
+    if (calculando && t_inicio > 0) {
+      t_fin = micros();
+    }
   }
 }
 
@@ -185,9 +218,14 @@ void MenuConfig() {
   t_inicio = 0; t_fin = 0; calculando = false;
   attachInterrupt(digitalPinToInterrupt(PIN_S1), isr_sensor, CHANGE);
   
-  // Refrescar luces al salir
-  actualizarPantalla(stripP1, 1, 0, true);
-  actualizarPantalla(stripP2, 2, 0, false);
+  // ✅ Restaurar displays con últimos puntajes
+  if(turnoActual == 1) {
+     actualizarPantalla(stripP1, 1, ultimoPuntajeP1, true);
+     actualizarPantalla(stripP2, 2, ultimoPuntajeP2, false);
+  } else {
+     actualizarPantalla(stripP1, 1, ultimoPuntajeP1, false);
+     actualizarPantalla(stripP2, 2, ultimoPuntajeP2, true);
+  }
 }
 
 // ==========================================
@@ -197,7 +235,7 @@ void setup() {
   Serial.begin(115200);
   
   pref.begin("arcade", true);
-  factorDificultad = pref.getFloat("dif", 1.0);
+  factorDificultad = pref.getFloat("dif", 0.5); 
   pref.end();
 
   lcd.init(); lcd.noBacklight(); lcd.clear();
@@ -212,9 +250,11 @@ void setup() {
 
   attachInterrupt(digitalPinToInterrupt(PIN_S1), isr_sensor, CHANGE);
 
-  // Estado Inicial: P1 Activo (000 tenue), P2 Inactivo (Apagado)
+  // ✅ Ambos displays encendidos desde el inicio
   actualizarPantalla(stripP1, 1, 0, true);
   actualizarPantalla(stripP2, 2, 0, false);
+  
+  Serial.println("SISTEMA INICIADO. Sensor en pin 26.");
 }
 
 // ==========================================
@@ -222,6 +262,13 @@ void setup() {
 // ==========================================
 void loop() {
   
+  // Debug seguro
+  if (sensor_detectado_debug) {
+    Serial.print("Sensor activado! Corte #");
+    Serial.println(contadorCortes);
+    sensor_detectado_debug = false;
+  }
+
   if (calculando && t_fin > 0) {
     unsigned long duracion = t_fin - t_inicio;
     
@@ -230,48 +277,52 @@ void loop() {
       float velocidad = ANCHO_ALETA_M / segundos;
       int puntaje = (velocidad * 100) / factorDificultad;
       if (puntaje > 999) puntaje = 999;
+      
+      Serial.printf("Golpe válido! Duracion: %.5f s | Puntos: %d\n", segundos, puntaje);
 
-      // --- LÓGICA DE TURNOS ---
       if (turnoActual == 1) {
-        // Turno P1: Animar y mostrar
+        ultimoPuntajeP1 = puntaje;
         animarConteo(stripP1, 1, puntaje);
-        
-        // Activar P2 (Muestra 000 tenue) y Desactivar P1 (Muestra puntaje fijo)
-        // Nota: Al final de animarConteo, P1 queda con el puntaje y 'activo=true'.
-        // Podríamos dejarlo así o apagarle el indicador de jugador si prefieres.
-        
-        actualizarPantalla(stripP2, 2, 0, true); 
+        actualizarPantalla(stripP1, 1, puntaje, false);
+        actualizarPantalla(stripP2, 2, ultimoPuntajeP2, true);
         turnoActual = 2;
-        
       } else {
-        // Turno P2: Animar y mostrar
+        ultimoPuntajeP2 = puntaje;
         animarConteo(stripP2, 2, puntaje);
-        
-        // Pausa Final
+        actualizarPantalla(stripP2, 2, puntaje, false);
         delay(3000); 
-        
-        // Reiniciar ronda
         turnoActual = 1;
-        actualizarPantalla(stripP1, 1, 0, true);  
-        actualizarPantalla(stripP2, 2, 0, false); 
+        actualizarPantalla(stripP1, 1, ultimoPuntajeP1, true);
+        actualizarPantalla(stripP2, 2, puntaje, false);
       }
 
-      // Anti-retorno (3 segundos)
       tiempo_bloqueo_hasta = millis() + 3000;
-      delay(3000); 
+      delay(3000);
+      
+      // ✅ RESETEAR contador para siguiente jugada
+      contadorCortes = 0;
+      primerCorteIgnorado = false;
     } 
     
     t_inicio = 0; t_fin = 0; calculando = false;
   }
 
-  // Timeout
   if (calculando && t_fin == 0) {
     if ((micros() - t_inicio) > (TIMEOUT_MS * 1000)) {
+       Serial.println("Error: Timeout de sensor.");
        t_inicio = 0; calculando = false;
-       // Si hay error, restauramos el estado "000 Tenue" del turno actual
-       if(turnoActual == 1) actualizarPantalla(stripP1, 1, 0, true);
-       else                 actualizarPantalla(stripP2, 2, 0, true);
        
+       // ✅ RESETEAR en caso de timeout
+       contadorCortes = 0;
+       primerCorteIgnorado = false;
+       
+       if(turnoActual == 1) {
+         actualizarPantalla(stripP1, 1, ultimoPuntajeP1, true);
+         actualizarPantalla(stripP2, 2, ultimoPuntajeP2, false);
+       } else {
+         actualizarPantalla(stripP1, 1, ultimoPuntajeP1, false);
+         actualizarPantalla(stripP2, 2, ultimoPuntajeP2, true);
+       }
        tiempo_bloqueo_hasta = millis() + 1000;
     }
   }
