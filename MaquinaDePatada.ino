@@ -1,20 +1,21 @@
 #include <Arduino.h>
 #include <LiquidCrystal_I2C.h>
 #include <Adafruit_NeoPixel.h>
-#include <Preferences.h>
+#include <EEPROM.h> 
 
 // ==========================================
-// CONFIGURACIÓN DE PINES
+// CONFIGURACIÓN DE PINES (ARDUINO MEGA)
 // ==========================================
-#define PIN_S1          26   // Sensor Único
+#define PIN_S1          2    // SENSOR DE LA PELOTA (INT0)
+#define PIN_NEO_P1      3    // Tira Arriba (Tiros impares)
+#define PIN_NEO_P2      6    // Tira Abajo (Tiros pares)
 
-#define PIN_NEO_P1      27   // Tira Jugador 1
-#define PIN_NEO_P2      25   // Tira Jugador 2
+#define PIN_MONEDERO    8    // Entrada Monedero / Start
+#define PIN_BOBINA      9    // Salida Rele
 
-// ¡CAMBIO DE PINES! (34 y 35 no tienen PullUp, por eso fallaba)
-#define BTNConfig       12   // Botón Menú 35
-#define BTNUp           13   // Botón Subir 4
-#define BTNDown         14   // Botón Bajar 34
+#define BTNConfig       10   
+#define BTNUp           11   
+#define BTNDown         12   
 
 // --- LUCES ---
 #define NUM_MATRICES      4
@@ -22,39 +23,60 @@
 #define NUMPIXELS         (NUM_MATRICES * PIXELS_PER_MATRIX) 
 #define BRIGHTNESS        15 
 
+// --- EEPROM ---
+#define ADDR_DIF        0  
+#define ADDR_COINS      4  
+#define ADDR_SHOTS      6  
+
 // ==========================================
 // OBJETOS
 // ==========================================
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 Adafruit_NeoPixel stripP1(NUMPIXELS, PIN_NEO_P1, NEO_GRB + NEO_KHZ800);
 Adafruit_NeoPixel stripP2(NUMPIXELS, PIN_NEO_P2, NEO_GRB + NEO_KHZ800);
-Preferences pref; 
 
 // ==========================================
-// VARIABLES
+// CONFIGURACIÓN
+// ==========================================
+float factorDificultad = 0.5; 
+int configMonedas = 2;       // 0 = GRATIS
+int configTiros = 2;         
+
+// ==========================================
+// VARIABLES JUEGO
 // ==========================================
 const float ANCHO_ALETA_M = 0.03;      
 const unsigned long TIMEOUT_MS = 1000; 
-float factorDificultad = 0.5; 
 
-// Juego
-int turnoActual = 1; 
+int tiroActual = 1; 
+int creditosContados = 0; 
+bool juegoHabilitado = false;
+
+// Cronómetro
 volatile unsigned long t_inicio = 0;
 volatile unsigned long t_fin = 0;
 volatile bool calculando = false;
 unsigned long tiempo_bloqueo_hasta = 0; 
-volatile bool sensor_detectado_debug = false;
 
-// ✅ NUEVO: Control de pasos del sensor
-volatile bool primerCorteIgnorado = false;
+// Sensor Anti-Rebote
 volatile int contadorCortes = 0;
+volatile unsigned long ultimo_tiempo_corte = 0; 
+const int DEBOUNCE_TIME = 150; 
 
-// Últimos puntajes
-int ultimoPuntajeP1 = 0;
-int ultimoPuntajeP2 = 0;
+// Depuración
+volatile bool flag_debug_corte_1 = false; 
+volatile bool flag_debug_corte_2 = false; 
+
+// Bobina
+unsigned long tiempo_inicio_bobina = 0;
+bool bobinaActiva = false;
+const int DURACION_BOBINA = 1000; // Tiempo que la bobina queda activada (1 seg)
+
+// Puntajes 
+int mejorPuntaje = 0; 
 
 // ==========================================
-// FUNCIONES DE PANTALLA LED
+// PANTALLA LED
 // ==========================================
 int getPixelIndex(int x, int y) {
   if (y % 2 == 0) return (y * 8) + x;
@@ -63,16 +85,16 @@ int getPixelIndex(int x, int y) {
 
 void dibujarDigito(Adafruit_NeoPixel &tira, int num, int matrizPos, uint32_t color) {
   const byte digits[10][8] = {
-    {0x3C,0x42,0x42,0x42,0x42,0x42,0x42,0x3C}, // 0
-    {0x18,0x1C,0x18,0x18,0x18,0x18,0x18,0x3E}, // 1
-    {0x3C,0x42,0x02,0x20,0x08,0x08,0x20,0x7E}, // 2
-    {0x3C,0x42,0x02,0x3C,0x02,0x40,0x42,0x3C}, // 3
-    {0x04,0x30,0x14,0x24,0x7E,0x20,0x04,0x20}, // 4
-    {0x7E,0x02,0x7C,0x40,0x02,0x40,0x42,0x3C}, // 5
-    {0x3C,0x02,0x40,0x3E,0x42,0x42,0x42,0x3C}, // 6
-    {0x7E,0x40,0x02,0x20,0x08,0x08,0x20,0x04}, // 7
-    {0x3C,0x42,0x42,0x3C,0x42,0x42,0x42,0x3C}, // 8
-    {0x3C,0x42,0x42,0x7C,0x02,0x40,0x02,0x3C}  // 9
+    {0x3C,0x42,0x42,0x42,0x42,0x42,0x42,0x3C}, 
+    {0x18,0x1C,0x18,0x18,0x18,0x18,0x18,0x3E}, 
+    {0x3C,0x42,0x02,0x20,0x08,0x08,0x20,0x7E}, 
+    {0x3C,0x42,0x02,0x3C,0x02,0x40,0x42,0x3C}, 
+    {0x04,0x30,0x14,0x24,0x7E,0x20,0x04,0x20}, 
+    {0x7E,0x02,0x7C,0x40,0x02,0x40,0x42,0x3C}, 
+    {0x3C,0x02,0x40,0x3E,0x42,0x42,0x42,0x3C}, 
+    {0x7E,0x40,0x02,0x20,0x08,0x08,0x20,0x04}, 
+    {0x3C,0x42,0x42,0x3C,0x42,0x42,0x42,0x3C}, 
+    {0x3C,0x42,0x42,0x7C,0x02,0x40,0x02,0x3C}  
   };
   int offset = matrizPos * PIXELS_PER_MATRIX;
   for (int y = 0; y < 8; y++) {
@@ -84,16 +106,13 @@ void dibujarDigito(Adafruit_NeoPixel &tira, int num, int matrizPos, uint32_t col
   }
 }
 
-void actualizarPantalla(Adafruit_NeoPixel &tira, int numeroJugador, int puntaje, bool activo) {
+void actualizarPantalla(Adafruit_NeoPixel &tira, int numeroTiro, int puntaje, bool activo) {
   tira.clear();
-  
-  // 1. DIBUJAR NÚMERO DE JUGADOR
-  uint32_t colorJugador;
-  if (numeroJugador == 1) colorJugador = activo ? tira.Color(0,0,255) : tira.Color(0,0,50); // ✅ Azul tenue si inactivo
-  else                    colorJugador = activo ? tira.Color(255,0,255) : tira.Color(50,0,50); // ✅ Magenta tenue si inactivo
-  dibujarDigito(tira, numeroJugador, 0, colorJugador);
+  uint32_t colorId;
+  if (numeroTiro % 2 != 0) colorId = activo ? tira.Color(0,0,255) : tira.Color(0,0,50); 
+  else                     colorId = activo ? tira.Color(255,0,255) : tira.Color(50,0,50); 
+  dibujarDigito(tira, numeroTiro, 0, colorId);
 
-  // 2. DIBUJAR PUNTAJE
   if (puntaje > 999) puntaje = 999;
   
   int c = puntaje / 100;
@@ -101,88 +120,74 @@ void actualizarPantalla(Adafruit_NeoPixel &tira, int numeroJugador, int puntaje,
   int u = puntaje % 10;
 
   uint32_t colorScore = 0;
-
-  // Determinar color base según puntaje
   if (puntaje > 0) {
       colorScore = (puntaje < 300) ? tira.Color(0,255,0) : 
                    (puntaje < 700) ? tira.Color(255,200,0) : tira.Color(255,0,0);
-      
-      // ✅ Si está inactivo, reducir brillo al 25%
       if (!activo) {
-        uint8_t r = (colorScore >> 16) & 0xFF;
-        uint8_t g = (colorScore >> 8) & 0xFF;
-        uint8_t b = colorScore & 0xFF;
+        uint8_t r = (uint8_t)(colorScore >> 16);
+        uint8_t g = (uint8_t)(colorScore >> 8);
+        uint8_t b = (uint8_t)colorScore;
         colorScore = tira.Color(r/4, g/4, b/4);
       }
+      if(c > 0) dibujarDigito(tira, c, 1, colorScore);
+      else      dibujarDigito(tira, 0, 1, colorScore);
+      if(c > 0 || d > 0) dibujarDigito(tira, d, 2, colorScore);
+      else               dibujarDigito(tira, 0, 2, colorScore);
+      dibujarDigito(tira, u, 3, colorScore);
   } else {
-      // ✅ ESTADO DEFAULT: "000" siempre visible (activo o inactivo)
-      colorScore = tira.Color(20, 20, 20); // Gris visible para ambos
+      colorScore = tira.Color(20, 20, 20); 
+      dibujarDigito(tira, 0, 1, colorScore);
+      dibujarDigito(tira, 0, 2, colorScore);
+      dibujarDigito(tira, 0, 3, colorScore); 
   }
-  
-  // Dibujar dígitos (SIEMPRE mostrar al menos "000")
-  if(c > 0) dibujarDigito(tira, c, 1, colorScore);
-  else      dibujarDigito(tira, 0, 1, colorScore); // ✅ Mostrar 0 explícitamente
-  
-  if(c > 0 || d > 0) dibujarDigito(tira, d, 2, colorScore);
-  else               dibujarDigito(tira, 0, 2, colorScore); // ✅ Mostrar 0 explícitamente
-  
-  dibujarDigito(tira, u, 3, colorScore); // Siempre mostrar unidades
   tira.show();
 }
 
-void animarConteo(Adafruit_NeoPixel &tira, int numeroJugador, int puntajeFinal) {
+void animarConteo(Adafruit_NeoPixel &tira, int numeroTiro, int puntajeFinal) {
   if (puntajeFinal == 0) return;
-  int incremento = 1;
-  if (puntajeFinal > 300) incremento = 3;
-  if (puntajeFinal > 700) incremento = 5;
-
+  int incremento = (puntajeFinal > 700) ? 10 : (puntajeFinal > 300) ? 5 : 2;
   for (int i = 0; i <= puntajeFinal; i += incremento) {
     if (i > puntajeFinal) i = puntajeFinal;
-    actualizarPantalla(tira, numeroJugador, i, true);
-    if (puntajeFinal - i < 50) delay(15); else delay(5);
+    actualizarPantalla(tira, numeroTiro, i, true);
+    if (puntajeFinal - i < 50) delay(2); else delay(10);
   }
-  actualizarPantalla(tira, numeroJugador, puntajeFinal, true);
-  delay(500); 
+  actualizarPantalla(tira, numeroTiro, puntajeFinal, true);
+  delay(300); 
 }
 
 // ==========================================
-// INTERRUPCIÓN SENSOR (LIMPIA)
+// INTERRUPCIÓN SENSOR
 // ==========================================
-// ==========================================
-// INTERRUPCIÓN SENSOR (CON BLOQUEO DE PRIMER CORTE)
-// ==========================================
-void IRAM_ATTR isr_sensor() {
-  if (millis() < tiempo_bloqueo_hasta) return; 
-
-  int estado = digitalRead(PIN_S1);
+void isr_sensor() {
+  if (!juegoHabilitado) return; 
   
-  if (estado == LOW) { // Objeto entra en ranura
+  int estado = digitalRead(PIN_S1);
+  unsigned long tiempo_actual = millis();
+
+  if (estado == LOW) { 
+    if (tiempo_actual - ultimo_tiempo_corte < DEBOUNCE_TIME) return;
+    
     contadorCortes++;
-    
-    // ✅ IGNORAR EL PRIMER CORTE (pelota yendo hacia el usuario)
+    ultimo_tiempo_corte = tiempo_actual;
+
     if (contadorCortes == 1) {
-      primerCorteIgnorado = true;
-      sensor_detectado_debug = true; // Debug
-      Serial.println("Primer corte ignorado (ida)");
-      return; // ⛔ NO iniciar cronómetro
+      flag_debug_corte_1 = true; 
     }
-    
-    // ✅ SEGUNDO CORTE EN ADELANTE (pelota regresando)
-    if (contadorCortes >= 2 && !calculando) { 
-      t_inicio = micros(); 
-      calculando = true; 
-      sensor_detectado_debug = true;
+    else if (contadorCortes == 2) {
+      if (!calculando) { 
+        t_inicio = micros(); 
+        calculando = true; 
+        flag_debug_corte_2 = true; 
+      }
     }
   } 
-  else { // Objeto sale de ranura
-    if (calculando && t_inicio > 0) {
-      t_fin = micros();
-    }
+  else { 
+    if (calculando && t_inicio > 0) t_fin = micros();
   }
 }
 
 // ==========================================
-// MENÚ DE CONFIGURACIÓN
+// MENÚ
 // ==========================================
 bool leerBoton(int pin) {
   if (digitalRead(pin) == LOW) {
@@ -197,52 +202,73 @@ bool leerBoton(int pin) {
 
 void MenuConfig() {
   detachInterrupt(digitalPinToInterrupt(PIN_S1)); 
-  
   lcd.backlight(); lcd.clear(); lcd.print(" CONFIGURACION"); delay(1000);
-  
-  lcd.clear(); lcd.print("Dificultad:");
+
+  lcd.clear(); lcd.print("DIFICULTAD");
   while(digitalRead(BTNConfig) == HIGH) {
     lcd.setCursor(0,1); lcd.print(factorDificultad); lcd.print("   ");
     if(leerBoton(BTNUp)) factorDificultad += 0.1;
     if(leerBoton(BTNDown) && factorDificultad > 0.1) factorDificultad -= 0.1;
   }
-  while(digitalRead(BTNConfig) == LOW) delay(50); 
-  
-  pref.begin("arcade", false);
-  pref.putFloat("dif", factorDificultad);
-  pref.end();
+  while(digitalRead(BTNConfig) == LOW) delay(50);
 
-  lcd.clear(); lcd.print("GUARDADO!"); delay(1000);
+  lcd.clear(); lcd.print("MONEDAS REQ.");
+  while(digitalRead(BTNConfig) == HIGH) {
+    lcd.setCursor(0,1); 
+    if(configMonedas == 0) lcd.print("GRATIS / TEST ");
+    else { lcd.print(configMonedas); lcd.print(" Monedas     "); }
+    if(leerBoton(BTNUp)) configMonedas++;
+    if(leerBoton(BTNDown) && configMonedas > 0) configMonedas--; 
+  }
+  while(digitalRead(BTNConfig) == LOW) delay(50);
+
+  lcd.clear(); lcd.print("TIROS X JUEGO");
+  while(digitalRead(BTNConfig) == HIGH) {
+    lcd.setCursor(0,1); lcd.print(configTiros); lcd.print(" Tiros  ");
+    if(leerBoton(BTNUp)) configTiros++;
+    if(leerBoton(BTNDown) && configTiros > 1) configTiros--;
+  }
+  while(digitalRead(BTNConfig) == LOW) delay(50);
+
+  EEPROM.put(ADDR_DIF, factorDificultad);
+  EEPROM.put(ADDR_COINS, configMonedas);
+  EEPROM.put(ADDR_SHOTS, configTiros);
+
+  lcd.clear(); lcd.print(" DATOS GUARDADOS"); delay(1500);
   lcd.noBacklight(); lcd.clear();
 
   t_inicio = 0; t_fin = 0; calculando = false;
+  creditosContados = 0; 
+  contadorCortes = 0;
   attachInterrupt(digitalPinToInterrupt(PIN_S1), isr_sensor, CHANGE);
   
-  // ✅ Restaurar displays con últimos puntajes
-  if(turnoActual == 1) {
-     actualizarPantalla(stripP1, 1, ultimoPuntajeP1, true);
-     actualizarPantalla(stripP2, 2, ultimoPuntajeP2, false);
-  } else {
-     actualizarPantalla(stripP1, 1, ultimoPuntajeP1, false);
-     actualizarPantalla(stripP2, 2, ultimoPuntajeP2, true);
-  }
+  actualizarPantalla(stripP1, 1, 0, false);
+  actualizarPantalla(stripP2, 2, 0, false);
 }
 
 // ==========================================
 // SETUP
 // ==========================================
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
   
-  pref.begin("arcade", true);
-  factorDificultad = pref.getFloat("dif", 0.5); 
-  pref.end();
+  EEPROM.get(ADDR_DIF, factorDificultad);
+  EEPROM.get(ADDR_COINS, configMonedas);
+  EEPROM.get(ADDR_SHOTS, configTiros);
+
+  if (isnan(factorDificultad) || factorDificultad < 0.1 || factorDificultad > 5.0) factorDificultad = 0.5;
+  if (configMonedas < 0 || configMonedas > 20) configMonedas = 2; 
+  if (configTiros < 1 || configTiros > 20) configTiros = 2;
 
   lcd.init(); lcd.noBacklight(); lcd.clear();
   
-  stripP1.begin(); stripP1.setBrightness(BRIGHTNESS); stripP1.clear();
-  stripP2.begin(); stripP2.setBrightness(BRIGHTNESS); stripP2.clear();
+  stripP1.begin(); stripP1.setBrightness(BRIGHTNESS); stripP1.clear(); stripP1.show();
+  stripP2.begin(); stripP2.setBrightness(BRIGHTNESS); stripP2.clear(); stripP2.show();
   
+  pinMode(PIN_MONEDERO, INPUT_PULLUP);
+  pinMode(PIN_BOBINA, OUTPUT);
+  digitalWrite(PIN_BOBINA, LOW); 
+
   pinMode(PIN_S1, INPUT_PULLUP);
   pinMode(BTNConfig, INPUT_PULLUP);
   pinMode(BTNUp, INPUT_PULLUP);
@@ -250,82 +276,164 @@ void setup() {
 
   attachInterrupt(digitalPinToInterrupt(PIN_S1), isr_sensor, CHANGE);
 
-  // ✅ Ambos displays encendidos desde el inicio
-  actualizarPantalla(stripP1, 1, 0, true);
+  actualizarPantalla(stripP1, 1, 0, false);
   actualizarPantalla(stripP2, 2, 0, false);
   
-  Serial.println("SISTEMA INICIADO. Sensor en pin 26.");
+  Serial.println("SISTEMA MEGA: INICIADO");
+  Serial.print("Pin Monedero: "); Serial.println(PIN_MONEDERO);
+  Serial.print("Pin Bobina: "); Serial.println(PIN_BOBINA);
 }
 
 // ==========================================
 // LOOP
 // ==========================================
 void loop() {
-  
-  // Debug seguro
-  if (sensor_detectado_debug) {
-    Serial.print("Sensor activado! Corte #");
-    Serial.println(contadorCortes);
-    sensor_detectado_debug = false;
-  }
 
-  if (calculando && t_fin > 0) {
-    unsigned long duracion = t_fin - t_inicio;
-    
-    if (duracion > 2000) { 
-      float segundos = duracion / 1000000.0;
-      float velocidad = ANCHO_ALETA_M / segundos;
-      int puntaje = (velocidad * 100) / factorDificultad;
-      if (puntaje > 999) puntaje = 999;
-      
-      Serial.printf("Golpe válido! Duracion: %.5f s | Puntos: %d\n", segundos, puntaje);
+  // 1. INICIO
+  if (!juegoHabilitado) {
+    if (digitalRead(PIN_MONEDERO) == LOW) {
+       delay(50); 
+       if (digitalRead(PIN_MONEDERO) == LOW) {
+           bool iniciarJuego = false;
 
-      if (turnoActual == 1) {
-        ultimoPuntajeP1 = puntaje;
-        animarConteo(stripP1, 1, puntaje);
-        actualizarPantalla(stripP1, 1, puntaje, false);
-        actualizarPantalla(stripP2, 2, ultimoPuntajeP2, true);
-        turnoActual = 2;
-      } else {
-        ultimoPuntajeP2 = puntaje;
-        animarConteo(stripP2, 2, puntaje);
-        actualizarPantalla(stripP2, 2, puntaje, false);
-        delay(3000); 
-        turnoActual = 1;
-        actualizarPantalla(stripP1, 1, ultimoPuntajeP1, true);
-        actualizarPantalla(stripP2, 2, puntaje, false);
-      }
+           if(configMonedas == 0) {
+               Serial.println(">> START (GRATIS) <<");
+               iniciarJuego = true;
+           } 
+           else {
+               creditosContados++;
+               Serial.print("Credito: "); Serial.print(creditosContados); Serial.print("/"); Serial.println(configMonedas);
+               lcd.backlight(); lcd.setCursor(0,0); 
+               lcd.print("CREDITOS: "); lcd.print(creditosContados); lcd.print("/"); lcd.print(configMonedas);
+               if(creditosContados >= configMonedas) iniciarJuego = true;
+           }
 
-      tiempo_bloqueo_hasta = millis() + 3000;
-      delay(3000);
-      
-      // ✅ RESETEAR contador para siguiente jugada
-      contadorCortes = 0;
-      primerCorteIgnorado = false;
-    } 
-    
-    t_inicio = 0; t_fin = 0; calculando = false;
-  }
+           while(digitalRead(PIN_MONEDERO) == LOW) delay(10); 
+           if(configMonedas > 0) { delay(1000); lcd.noBacklight(); lcd.clear(); }
 
-  if (calculando && t_fin == 0) {
-    if ((micros() - t_inicio) > (TIMEOUT_MS * 1000)) {
-       Serial.println("Error: Timeout de sensor.");
-       t_inicio = 0; calculando = false;
-       
-       // ✅ RESETEAR en caso de timeout
-       contadorCortes = 0;
-       primerCorteIgnorado = false;
-       
-       if(turnoActual == 1) {
-         actualizarPantalla(stripP1, 1, ultimoPuntajeP1, true);
-         actualizarPantalla(stripP2, 2, ultimoPuntajeP2, false);
-       } else {
-         actualizarPantalla(stripP1, 1, ultimoPuntajeP1, false);
-         actualizarPantalla(stripP2, 2, ultimoPuntajeP2, true);
+           if (iniciarJuego) {
+               creditosContados = 0; 
+               Serial.println("INICIANDO JUEGO...");
+               juegoHabilitado = true;
+               tiroActual = 1;
+               mejorPuntaje = 0;
+               contadorCortes = 0;
+               calculando = false;
+
+               // Liberar pelota 1
+               Serial.println("Activando Bobina (Tiro 1)...");
+               digitalWrite(PIN_BOBINA, HIGH);
+               bobinaActiva = true;
+               tiempo_inicio_bobina = millis();
+
+               actualizarPantalla(stripP1, 1, 0, true);  
+               actualizarPantalla(stripP2, 2, 0, false); 
+           }
        }
-       tiempo_bloqueo_hasta = millis() + 1000;
     }
   }
+
+  // 2. APAGADO AUTOMÁTICO BOBINA
+  if (bobinaActiva) {
+    if (millis() - tiempo_inicio_bobina >= DURACION_BOBINA) {
+      digitalWrite(PIN_BOBINA, LOW);
+      bobinaActiva = false;
+      Serial.println("Bobina OFF");
+    }
+  }
+
+  // 3. JUEGO
+  if (juegoHabilitado) {
+      
+      if (calculando && t_fin > 0) {
+        unsigned long duracion = t_fin - t_inicio;
+        
+        if (duracion > 1000) { 
+          float segundos = duracion / 1000000.0;
+          float velocidad = ANCHO_ALETA_M / segundos;
+          int puntaje = (velocidad * 100) / factorDificultad;
+          if (puntaje > 999) puntaje = 999;
+          
+          Serial.print("Tiro #"); Serial.print(tiroActual);
+          Serial.print(" | Puntos: "); Serial.println(puntaje);
+          
+          if (puntaje > mejorPuntaje) mejorPuntaje = puntaje;
+
+          Adafruit_NeoPixel &targetStrip = (tiroActual % 2 != 0) ? stripP1 : stripP2;
+          
+          animarConteo(targetStrip, tiroActual, puntaje);
+          actualizarPantalla(targetStrip, tiroActual, puntaje, true); 
+
+          if (tiroActual < configTiros) {
+              
+              // 1. ESPERAR 2 SEGUNDOS (Jugador ve su puntaje)
+              Serial.println("Esperando 2 segundos para siguiente tiro...");
+              delay(2000); 
+              
+              // 2. Apagar brillo del tiro anterior
+              actualizarPantalla(targetStrip, tiroActual, puntaje, false); 
+
+              // 3. Incrementar tiro
+              tiroActual++;
+              
+              // 4. RESETEAR VARIABLES DEL SENSOR (Importante antes de soltar pelota)
+              contadorCortes = 0;
+              calculando = false;
+              t_inicio = 0; t_fin = 0;
+              ultimo_tiempo_corte = 0;
+
+              // 5. SOLTAR PELOTA DE NUEVO
+              Serial.println("Activando Bobina (Siguiente Tiro)...");
+              digitalWrite(PIN_BOBINA, HIGH);
+              bobinaActiva = true;
+              tiempo_inicio_bobina = millis();
+
+              // 6. Preparar pantalla nueva
+              Adafruit_NeoPixel &nextStrip = (tiroActual % 2 != 0) ? stripP1 : stripP2;
+              actualizarPantalla(nextStrip, tiroActual, 0, true);
+
+          } else {
+              Serial.println("JUEGO TERMINADO");
+              delay(1000);
+              
+              actualizarPantalla(targetStrip, tiroActual, puntaje, (puntaje == mejorPuntaje));
+              
+              lcd.backlight(); lcd.setCursor(0,0); lcd.print("  MEJOR PUNT.   ");
+              lcd.setCursor(0,1); lcd.print("      "); lcd.print(mejorPuntaje);
+              delay(4000);
+              lcd.noBacklight(); lcd.clear();
+
+              juegoHabilitado = false;
+          }
+          
+          tiempo_bloqueo_hasta = millis() + 1000; 
+          delay(1000); 
+          
+          contadorCortes = 0;
+          calculando = false;
+          t_inicio = 0; t_fin = 0;
+        } 
+        else {
+           Serial.println("Ruido detectado - Ignorando");
+           calculando = false;
+           contadorCortes = 0;
+        }
+      }
+
+      if (calculando && t_fin == 0) {
+        if ((micros() - t_inicio) > (TIMEOUT_MS * 1000)) {
+           Serial.println("Timeout sensor");
+           calculando = false;
+           contadorCortes = 0;
+           actualizarPantalla(stripP1, (tiroActual%2!=0)?tiroActual:tiroActual-1, 0, false);
+           actualizarPantalla(stripP2, (tiroActual%2==0)?tiroActual:tiroActual-1, 0, false);
+           tiempo_bloqueo_hasta = millis() + 500;
+        }
+      }
+  }
+
+  if (flag_debug_corte_1) { Serial.println(">>> Sensor: IDA (Ignorado)"); flag_debug_corte_1 = false; }
+  if (flag_debug_corte_2) { Serial.println(">>> Sensor: VUELTA (Midiendo)"); flag_debug_corte_2 = false; }
 
   if (digitalRead(BTNConfig) == LOW) MenuConfig();
 }
