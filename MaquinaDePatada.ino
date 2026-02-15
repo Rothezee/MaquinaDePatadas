@@ -6,18 +6,23 @@
 // ==========================================
 // CONFIGURACIÓN DE PINES (ARDUINO MEGA)
 // ==========================================
-#define PIN_S1          2    // SENSOR DE LA PELOTA (INT0)
-#define PIN_NEO_P1      3    // Tira Arriba (Tiros impares)
-#define PIN_NEO_P2      6    // Tira Abajo (Tiros pares)
+#define PIN_S1          2    // SENSOR (INT0)
 
-#define PIN_MONEDERO    8    // Entrada Monedero / Start
-#define PIN_BOBINA      9    // Salida Rele
+#define PIN_NEO_P1      9    // Tira Arriba
+#define PIN_NEO_P2      8    // Tira Abajo
 
-#define BTNConfig       10   
-#define BTNUp           11   
-#define BTNDown         12   
+#define PIN_MONEDERO    7    // Entrada Monedero (Contador de créditos)
+#define PIN_BOBINA      3    // Salida Rele ()
 
-// --- LUCES ---
+#define PIN_BTN_START   6    // Botón físico de Start
+#define PIN_LED_START   5    // Luz del botón Start
+
+// --- BOTONERA ---
+#define BTNConfig       A0  
+#define BTNUp           A1   
+#define BTNDown         A2   
+
+// --- VARIABLES DE DIPLAY ---
 #define NUM_MATRICES      4
 #define PIXELS_PER_MATRIX 64
 #define NUMPIXELS         (NUM_MATRICES * PIXELS_PER_MATRIX) 
@@ -32,14 +37,14 @@
 // OBJETOS
 // ==========================================
 LiquidCrystal_I2C lcd(0x27, 16, 2);
-Adafruit_NeoPixel stripP1(NUMPIXELS, PIN_NEO_P1, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel stripP2(NUMPIXELS, PIN_NEO_P2, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel stripP1(NUMPIXELS, PIN_NEO_P1, NEO_GRB + NEO_KHZ800); //Display 1
+Adafruit_NeoPixel stripP2(NUMPIXELS, PIN_NEO_P2, NEO_GRB + NEO_KHZ800); //Display 2
 
 // ==========================================
 // CONFIGURACIÓN
 // ==========================================
 float factorDificultad = 0.5; 
-int configMonedas = 2;       // 0 = GRATIS
+int configMonedas = 2;
 int configTiros = 2;         
 
 // ==========================================
@@ -51,6 +56,7 @@ const unsigned long TIMEOUT_MS = 1000;
 int tiroActual = 1; 
 int creditosContados = 0; 
 bool juegoHabilitado = false;
+bool esperandoStart = false; // Nueva variable de estado
 
 // Cronómetro
 volatile unsigned long t_inicio = 0;
@@ -70,7 +76,11 @@ volatile bool flag_debug_corte_2 = false;
 // Bobina
 unsigned long tiempo_inicio_bobina = 0;
 bool bobinaActiva = false;
-const int DURACION_BOBINA = 1000; // Tiempo que la bobina queda activada (1 seg)
+const int DURACION_BOBINA = 1000; 
+
+// LED Start Parpadeo
+unsigned long ultimoParpadeo = 0;
+bool estadoLedStart = false;
 
 // Puntajes 
 int mejorPuntaje = 0; 
@@ -204,6 +214,7 @@ void MenuConfig() {
   detachInterrupt(digitalPinToInterrupt(PIN_S1)); 
   lcd.backlight(); lcd.clear(); lcd.print(" CONFIGURACION"); delay(1000);
 
+  // 1. DIFICULTAD
   lcd.clear(); lcd.print("DIFICULTAD");
   while(digitalRead(BTNConfig) == HIGH) {
     lcd.setCursor(0,1); lcd.print(factorDificultad); lcd.print("   ");
@@ -212,6 +223,7 @@ void MenuConfig() {
   }
   while(digitalRead(BTNConfig) == LOW) delay(50);
 
+  // 2. MONEDAS
   lcd.clear(); lcd.print("MONEDAS REQ.");
   while(digitalRead(BTNConfig) == HIGH) {
     lcd.setCursor(0,1); 
@@ -222,6 +234,7 @@ void MenuConfig() {
   }
   while(digitalRead(BTNConfig) == LOW) delay(50);
 
+  // 3. TIROS
   lcd.clear(); lcd.print("TIROS X JUEGO");
   while(digitalRead(BTNConfig) == HIGH) {
     lcd.setCursor(0,1); lcd.print(configTiros); lcd.print(" Tiros  ");
@@ -266,8 +279,12 @@ void setup() {
   stripP2.begin(); stripP2.setBrightness(BRIGHTNESS); stripP2.clear(); stripP2.show();
   
   pinMode(PIN_MONEDERO, INPUT_PULLUP);
+  pinMode(PIN_BTN_START, INPUT_PULLUP); // Nuevo Botón
+  pinMode(PIN_LED_START, OUTPUT);       // Nuevo LED
   pinMode(PIN_BOBINA, OUTPUT);
+  
   digitalWrite(PIN_BOBINA, LOW); 
+  digitalWrite(PIN_LED_START, LOW);
 
   pinMode(PIN_S1, INPUT_PULLUP);
   pinMode(BTNConfig, INPUT_PULLUP);
@@ -280,8 +297,6 @@ void setup() {
   actualizarPantalla(stripP2, 2, 0, false);
   
   Serial.println("SISTEMA MEGA: INICIADO");
-  Serial.print("Pin Monedero: "); Serial.println(PIN_MONEDERO);
-  Serial.print("Pin Bobina: "); Serial.println(PIN_BOBINA);
 }
 
 // ==========================================
@@ -289,51 +304,85 @@ void setup() {
 // ==========================================
 void loop() {
 
-  // 1. INICIO
-  if (!juegoHabilitado) {
+  // ======================================================
+  // 1. GESTIÓN DEL MONEDERO (Insertar créditos)
+  // ======================================================
+  if (!juegoHabilitado && !esperandoStart) {
     if (digitalRead(PIN_MONEDERO) == LOW) {
        delay(50); 
        if (digitalRead(PIN_MONEDERO) == LOW) {
-           bool iniciarJuego = false;
+           
+           bool creditosSuficientes = false;
 
            if(configMonedas == 0) {
-               Serial.println(">> START (GRATIS) <<");
-               iniciarJuego = true;
+               Serial.println("MODO GRATIS - Pasando a Start...");
+               creditosSuficientes = true;
            } 
            else {
                creditosContados++;
                Serial.print("Credito: "); Serial.print(creditosContados); Serial.print("/"); Serial.println(configMonedas);
-               lcd.backlight(); lcd.setCursor(0,0); 
-               lcd.print("CREDITOS: "); lcd.print(creditosContados); lcd.print("/"); lcd.print(configMonedas);
-               if(creditosContados >= configMonedas) iniciarJuego = true;
+               if(creditosContados >= configMonedas) creditosSuficientes = true;
            }
 
            while(digitalRead(PIN_MONEDERO) == LOW) delay(10); 
            if(configMonedas > 0) { delay(1000); lcd.noBacklight(); lcd.clear(); }
 
-           if (iniciarJuego) {
+           // SI TENEMOS CRÉDITO -> PASAMOS A ESPERAR EL BOTÓN START
+           if (creditosSuficientes) {
                creditosContados = 0; 
-               Serial.println("INICIANDO JUEGO...");
-               juegoHabilitado = true;
-               tiroActual = 1;
-               mejorPuntaje = 0;
-               contadorCortes = 0;
-               calculando = false;
-
-               // Liberar pelota 1
-               Serial.println("Activando Bobina (Tiro 1)...");
-               digitalWrite(PIN_BOBINA, HIGH);
-               bobinaActiva = true;
-               tiempo_inicio_bobina = millis();
-
-               actualizarPantalla(stripP1, 1, 0, true);  
-               actualizarPantalla(stripP2, 2, 0, false); 
+               Serial.println("CREDITOS LISTOS. ESPERANDO BOTON START...");
+               esperandoStart = true;
            }
        }
     }
   }
 
-  // 2. APAGADO AUTOMÁTICO BOBINA
+  // ======================================================
+  // 2. MODO ESPERA (Boton Start Parpadeando)
+  // ======================================================
+  if (esperandoStart) {
+      
+      // PARPADEO DEL LED (LENTO: 500ms)
+      if (millis() - ultimoParpadeo > 500) {
+          ultimoParpadeo = millis();
+          estadoLedStart = !estadoLedStart;
+          digitalWrite(PIN_LED_START, estadoLedStart);
+      }
+
+      // LEER BOTÓN START
+      if (digitalRead(PIN_BTN_START) == LOW) {
+          delay(50); // Debounce
+          if (digitalRead(PIN_BTN_START) == LOW) {
+              Serial.println(">>> START PRESIONADO <<<");
+              
+              // INICIAR JUEGO REALMENTE
+              esperandoStart = false;
+              juegoHabilitado = true;
+              digitalWrite(PIN_LED_START, LOW); // Apagar o dejar fijo el LED
+              
+              // Resetear variables de juego
+              tiroActual = 1;
+              mejorPuntaje = 0;
+              contadorCortes = 0;
+              calculando = false;
+
+              // SOLTAR PRIMERA PELOTA (Acción manual del botón)
+              Serial.println("Liberando Pelota 1...");
+              digitalWrite(PIN_BOBINA, HIGH);
+              bobinaActiva = true;
+              tiempo_inicio_bobina = millis();
+
+              actualizarPantalla(stripP1, 1, 0, true);  
+              actualizarPantalla(stripP2, 2, 0, false); 
+              
+              while(digitalRead(PIN_BTN_START) == LOW) delay(10);
+          }
+      }
+  }
+
+  // ======================================================
+  // 3. APAGADO AUTOMÁTICO BOBINA
+  // ======================================================
   if (bobinaActiva) {
     if (millis() - tiempo_inicio_bobina >= DURACION_BOBINA) {
       digitalWrite(PIN_BOBINA, LOW);
@@ -342,7 +391,9 @@ void loop() {
     }
   }
 
-  // 3. JUEGO
+  // ======================================================
+  // 4. LÓGICA DE JUEGO (SENSOR Y SECUENCIA AUTOMÁTICA)
+  // ======================================================
   if (juegoHabilitado) {
       
       if (calculando && t_fin > 0) {
@@ -366,33 +417,29 @@ void loop() {
 
           if (tiroActual < configTiros) {
               
-              // 1. ESPERAR 2 SEGUNDOS (Jugador ve su puntaje)
-              Serial.println("Esperando 2 segundos para siguiente tiro...");
+              // === SECUENCIA AUTOMÁTICA SIGUIENTE TIRO ===
+              Serial.println("Esperando 2 seg...");
               delay(2000); 
-              
-              // 2. Apagar brillo del tiro anterior
               actualizarPantalla(targetStrip, tiroActual, puntaje, false); 
 
-              // 3. Incrementar tiro
               tiroActual++;
               
-              // 4. RESETEAR VARIABLES DEL SENSOR (Importante antes de soltar pelota)
               contadorCortes = 0;
               calculando = false;
               t_inicio = 0; t_fin = 0;
               ultimo_tiempo_corte = 0;
 
-              // 5. SOLTAR PELOTA DE NUEVO
-              Serial.println("Activando Bobina (Siguiente Tiro)...");
+              // SOLTAR SIGUIENTE PELOTA (AUTOMÁTICO)
+              Serial.println("Liberando Pelota Automatica...");
               digitalWrite(PIN_BOBINA, HIGH);
               bobinaActiva = true;
               tiempo_inicio_bobina = millis();
 
-              // 6. Preparar pantalla nueva
               Adafruit_NeoPixel &nextStrip = (tiroActual % 2 != 0) ? stripP1 : stripP2;
               actualizarPantalla(nextStrip, tiroActual, 0, true);
 
           } else {
+              // --- FIN DEL JUEGO ---
               Serial.println("JUEGO TERMINADO");
               delay(1000);
               
@@ -403,7 +450,7 @@ void loop() {
               delay(4000);
               lcd.noBacklight(); lcd.clear();
 
-              juegoHabilitado = false;
+              juegoHabilitado = false; // Vuelve al inicio (esperar moneda)
           }
           
           tiempo_bloqueo_hasta = millis() + 1000; 
@@ -420,6 +467,7 @@ void loop() {
         }
       }
 
+      // Timeout Sensor
       if (calculando && t_fin == 0) {
         if ((micros() - t_inicio) > (TIMEOUT_MS * 1000)) {
            Serial.println("Timeout sensor");
@@ -432,8 +480,11 @@ void loop() {
       }
   }
 
+  // --- Condicionales de debuging ---
   if (flag_debug_corte_1) { Serial.println(">>> Sensor: IDA (Ignorado)"); flag_debug_corte_1 = false; }
   if (flag_debug_corte_2) { Serial.println(">>> Sensor: VUELTA (Midiendo)"); flag_debug_corte_2 = false; }
 
+
+  // --- Condicional de Menu
   if (digitalRead(BTNConfig) == LOW) MenuConfig();
 }
