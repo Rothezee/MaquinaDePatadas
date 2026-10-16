@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Display 40x16 RGB – PATEA</title>
+<style>
+:root{--bg:#f4f1ec;--fg:#1c1a17;--bt:#1c1a17;--bf:#f4f1ec;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171412;--fg:#f0ebe4;--bt:#f0ebe4;--bf:#171412}}
+:root[data-theme="dark"]{--bg:#171412;--fg:#f0ebe4;--bt:#f0ebe4;--bf:#171412}
+body{margin:0;padding:20px;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif}
+main{max-width:820px;margin:auto}
+h1{font-size:20px;margin:0 0 4px}p{margin:0 0 14px;opacity:.7;font-size:14px}
+canvas{width:100%;height:auto;border-radius:10px;display:block}
+.r{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;align-items:center;font-size:14px}
+button,select{background:var(--bf);color:var(--bt);border:1px solid var(--bt);border-radius:8px;padding:8px 12px;font-size:14px;cursor:pointer}
+</style></head><body><main>
+<h1>PATEA · 40×16 RGB</h1>
+<p>Flujo completo: ficha → dificultad → 3 patadas → VOS 1–MAQUINA 0 o MAQUINA 1–VOS 0. Metas: FACIL 120 · MEDIO 180 · CRACK 240 (máx. 300).</p>
+<canvas id="c" width="800" height="320"></canvas>
+<div class="r" id="b"></div>
+<div class="r"><label>Ver <select id="ver">
+<option value="coin">Inserte ficha</option>
+<option value="diff">Dificultad</option>
+<option value="ask">Patea</option>
+<option value="fly">La patada</option>
+<option value="res">Suma del puntaje</option>
+<option value="win1">Ganaste</option>
+<option value="win2">Vos 1</option>
+<option value="lose1">Maquina 1</option>
+<option value="burla">Game over</option>
+</select></label>
+<label>Fuerza de la patada <input type="range" id="pw" min="0" max="100" value="70"> <b id="pv">70</b></label>
+<label><input type="checkbox" id="au"> Auto</label></div>
+</main>
+<script>
+const W=40,H=16,TR=8,c=document.getElementById('c').getContext('2d');
+const F={A:[2,5,7,5,5],C:[7,4,4,4,7],D:[6,5,5,5,6],E:[7,4,6,4,7],F:[7,4,6,4,4],G:[7,4,5,5,7],H:[5,5,7,5,5],I:[7,2,2,2,7],K:[5,5,6,5,5],L:[4,4,4,4,7],M:[5,7,7,5,5],N:[6,5,5,5,5],O:[7,5,5,5,7],P:[7,5,7,4,4],Q:[7,5,5,7,3],R:[6,5,6,5,5],S:[7,4,7,1,7],T:[7,2,2,2,2],U:[5,5,5,5,7],V:[5,5,5,5,2],'+':[0,2,7,2,0],'=':[0,7,0,7,0],
+0:[7,5,5,5,7],1:[2,6,2,2,7],2:[7,1,7,4,7],3:[7,1,7,1,7],4:[5,5,7,1,1],5:[7,4,7,1,7],6:[7,4,7,5,7],7:[7,1,1,1,1],8:[7,5,7,5,7],9:[7,5,7,1,7]};
+const hsl=(h,l=50)=>`hsl(${h%360},100%,${l}%)`;
+let buf;
+const px=(x,y,col)=>{if(x>=0&&x<W&&y>=0&&y<H&&col)buf[y*W+x]=col};
+const spr=(r,x,y,pal)=>r.forEach((s,j)=>[...s].forEach((ch,i)=>ch!='.'&&px(x+i,y+j,pal[ch])));
+const tw=(s,k)=>s.length*4*k-k,ctr=(s,k)=>(W-tw(s,k))>>1;
+function txt(s,x,y,k,col,gap){const adv=3*k+(gap==null?k:gap);s=String(s);for(const ch of s){(F[ch]||[0,0,0,0,0]).forEach((r,j)=>{for(let i=0;i<3;i++)if(r>>(2-i)&1)for(let a=0;a<k;a++)for(let b=0;b<k;b++){const X=x+i*k+a,Y=y+j*k+b;px(X,Y,typeof col=='function'?col(X,Y):col)}});x+=adv}}
+const CEL='#74ACDF',BLANCO='#F4F7FB',SOL='#F6B40E';
+function fichaOndeo(frame){return(X,Y)=>{const onda=Math.sin(X*0.62+frame*0.38)*1.7,rel=Y-6+onda;return rel<3.1?CEL:rel<6.9?BLANCO:CEL}}
+const V4={G:[7,4,3],A:[2,7,5],M:[5,7,5],E:[7,6,7],O:[7,5,7],V:[5,5,2],R:[6,7,5]};
+function txtVertical(s,x,col){let y=0;for(const ch of String(s)){V4[ch].forEach(r=>{for(let i=0;i<3;i++)if((r>>(2-i))&1)px(x+i,y,col);y++});y++}}
+function caraGrande(frame){const Y='#F6B40E',K='#1a1208',W='#fff',O='#E39B00',T='#3ec0ff',x=10;
+ for(let dy=0;dy<16;dy++)for(let dx=0;dx<20;dx++){const d=Math.hypot(dx-9.5,dy-7.5);if(d<7.7)px(x+dx,dy,d>6.8?O:Y)}
+ [[3,6],[4,5],[5,4],[6,4],[7,5],[8,6],[11,6],[12,5],[13,4],[14,4],[15,5],[16,6]].forEach(([dx,dy])=>px(x+dx,dy,K));
+ const a=frame%5,b=(frame+2)%5;
+ [[3,7+a],[4,9+a],[16,7+b],[15,9+b]].forEach(([dx,dy])=>{if(dy<15)px(x+dx,dy,T)});
+ for(let dx=5;dx<=14;dx++){px(x+dx,9,W);px(x+dx,10,K);px(x+dx,11,K)}
+ px(x+4,10,K);px(x+15,10,K);[[6,12],[7,12],[8,12],[9,12],[10,12],[11,12],[12,12],[13,12]].forEach(([dx,dy])=>px(x+dx,dy,'#e07070'))}
+function solDeMayo(frame){const cx=19,cy=10,oro=SOL,cara='#A85A00',d=frame%2?2:3;
+ for(let y=-1;y<=1;y++)for(let x=-1;x<=1;x++)px(cx+x,cy+y,oro);
+ px(cx,cy-3,oro);px(cx,cy+3,oro);px(cx-3,cy,oro);px(cx+3,cy,oro);
+ px(cx-d,cy-d,oro);px(cx+d,cy-d,oro);px(cx-d,cy+d,oro);px(cx+d,cy+d,oro);
+ px(cx-1,cy,cara);px(cx+1,cy,cara);px(cx,cy+1,cara)}
+// cancha de fondo: líneas tenues
+const BG=new Array(W*H).fill(0);
+for(let y=0;y<H;y++)for(let x=0;x<W;x++)if(x==0||x==39||y==0||y==15||x==19||x==20||Math.abs(Math.hypot(x-19.5,y-7.5)-5)<.6)BG[y*W+x]='#074016';
+const C={h:'#8a4b12',f:'#ffb27a',s:'#74ACDF',p:'#1d46ff',w:'#ffffff',b:'#ffe600'};
+const P=["....hhh.....","....fff.....","....fff.....","...wswsw....","..swswsws...","..fwswswf...","..fwswswf...","...wswsw....","....ppp....."];
+const L={s:["....p.p.....","....f.f.....","....w.w.....","....w.w.....","....w.w.....","...bb.bb...."],
+w:["...pp.p.....","..ff..f.....","..w...w.....",".bb...w.....","......w.....","......bb...."],
+k:["....p.p........","....f.fffwwbb..","....w..........","....w..........","....w..........","...bb.........."]};
+const STAR=["#..#..#",".#.#.#.","..###..","#######","..###..",".#.#.#.","#..#..#"];
+const BALL=[".www.","wwwww","ww.ww","wwwww",".www."];
+const G={kicks:[],tot:0,dif:0,pow:70};
+const D=[["FACIL",120,120],["MEDIO",180,55],["CRACK",240,0]];
+const pos=t=>[15+3*t,Math.round(11-(1+G.pow*.02)*t+.15*t*t)];
+const sh=f=>X=>Math.abs(X-((f*2)%80-20))<3?'#fff':null;
+const S={
+coin:{d:f=>{const s=sh(f);txt("INSERTE",ctr("INSERTE",1),0,1,X=>s(X)||hsl(45));txt("FICHA",1,6,2,fichaOndeo(f));solDeMayo(f)}},
+diff:{d:f=>{const [n,m,h]=D[G.dif];txt("META "+m,4,0,1,'#fff');
+ for(let i=0;i<3;i++)for(let x=0;x<12;x++)px(i*14+x,5,i==G.dif?hsl(D[i][2]):'#3a3a3a');
+ txt(n,1,6,2,hsl(h,f%16<12?50:70))}},
+ask:{d:f=>{txt("PATADA "+(G.kicks.length+1),4,0,1,'#fff');txt("PATEA",1,6,2,X=>hsl(X*9+f*18))}},
+fly:{n:28,d:f=>{for(let x=0;x<W;x++)px(x,15,'#0c7a22');
+ for(let y=5;y<15;y++){px(35,y,'#fff');for(let x=36;x<40;x++)if((x+y)%2)px(x,y,'#2a5a3a')}
+ for(let x=35;x<40;x++)px(x,5,'#fff');
+ spr(P.concat(L[f<8?'s':f<14?'w':f<20?'k':'s']),2,1,C);
+ if(f>=14&&f<18)spr(STAR,11,8,{'#':f%2?'#ffe600':'#ffffff'});
+ if(f<14)spr(BALL,15,11,C);else{const t=f-14,[bx,by]=pos(t);
+  for(let k=1;k<=4;k++)if(t-k>=0){const [a,b]=pos(t-k);px(a+2,b+2,hsl(t*30+k*40))}
+  spr(BALL,bx,by,C)}}},
+res:{n:40,d:f=>{const k=G.kicks[G.kicks.length-1],v=Math.min(k,f*8),t=G.tot-k+v;
+ txt("+"+v,1,0,1,hsl(v*1.2));txt("TOTAL",20,0,1,'#bbb');
+ txt(String(t).padStart(3,'0'),9,6,2,hsl(Math.min(120,t/D[G.dif][1]*120)))}},
+win1:{n:47,d:f=>txt("GANASTE",W-f*2,3,2,X=>hsl(X*12+f*25))},
+win2:{n:48,d:f=>{buf.fill(0);for(let i=0;i<8;i++)px((i*5+f)%40,i%2?7:8,i%2?CEL:SOL);
+ txt("VOS=1",ctr("VOS=1",1),1,1,SOL);txt("MAQUINA=0",ctr("MAQUINA=0",1),9,1,BLANCO)}},
+lose1:{n:28,d:f=>{buf.fill(0);txt("MAQUINA=1",ctr("MAQUINA=1",1),1,1,'#ff4040');txt("VOS=0",ctr("VOS=0",1),9,1,BLANCO)}},
+lose2:{n:28,d:f=>{buf.fill(0);txt("MAQUINA=1",ctr("MAQUINA=1",1),1,1,f%8<4?'#ff4040':'#ffb0b0');txt("VOS=0",ctr("VOS=0",1),9,1,'#c8c8c8')}},
+burla:{n:42,d:f=>{buf.fill(0);caraGrande(f);txtVertical("GAME",0,"#ff3030");txtVertical("OVER",37,"#ff3030")}}
+};
+let sc='coin',f=0,pv=BG,last=BG,tr=99,dir='L',paused=false,fijo=false;
+const go=(s,d)=>{pv=last;sc=s;f=0;tr=0;dir=d;const sel=document.getElementById('ver');if(sel&&sel.value!==s&&sel.querySelector('option[value="'+s+'"]'))sel.value=s};
+function preparar(id){const p=+pw.value;G.pow=p;
+ if(id==='win1'||id==='win2'){G.kicks=[100,100,100];G.tot=300}
+ else if(id==='lose1'||id==='lose2'||id==='burla'){G.kicks=[10,10,10];G.tot=30;G.pow=10}
+ else if(id==='fly'||id==='res'){G.kicks=[p,p,p];G.tot=p*3}}
+function ver(id){fijo=true;paused=false;preparar(id);go(id,'L');tr=TR}
+const A={coin(){fijo=false;if(sc=='coin'){G.kicks=[];G.tot=0;go('diff','L')}},
+ mv(d){fijo=false;if(sc=='diff'){G.dif=(G.dif+d+3)%3;go('diff',d>0?'L':'R')}},
+ ok(){fijo=false;if(sc=='diff')go('ask','U')},
+ kick(){fijo=false;if(sc=='ask'){G.pow=+pw.value;G.kicks.push(G.pow);G.tot+=G.pow;go('fly','L')}}};
+const NX={fly:()=>go('res','L'),res:()=>G.kicks.length<3?go('ask','U'):go(G.tot>=D[G.dif][1]?'win1':'lose1','L'),
+ win1:()=>go('win2','U'),lose1:()=>go('lose2','U'),win2:()=>go('coin','L'),lose2:()=>go('burla','L'),burla:()=>go('coin','L')};
+function compose(a,b,t,d){const s=Math.round((t+1)/TR*(d=='U'?H:W)),o=new Array(W*H);
+ for(let y=0;y<H;y++)for(let x=0;x<W;x++){let v;
+  if(d=='L'){const X=x+s;v=X<W?a[y*W+X]:b[y*W+X-W]}
+  else if(d=='R'){const X=x-s;v=X>=0?a[y*W+X]:b[y*W+X+W]}
+  else{const Y=y+s;v=Y<H?a[Y*W+x]:b[(Y-H)*W+x]}
+  o[y*W+x]=v}return o}
+function draw(o){c.fillStyle='#120a0a';c.fillRect(0,0,800,320);
+ for(let y=0;y<H;y++)for(let x=0;x<W;x++){const on=o[y*W+x];c.beginPath();c.arc(x*20+10,y*20+10,7.5,0,7);
+  if(on){c.shadowColor=on;c.shadowBlur=14;c.fillStyle=on}else{c.shadowBlur=0;c.fillStyle='#241818'}c.fill()}}
+const pw=document.getElementById('pw'),au=document.getElementById('au');
+pw.oninput=()=>document.getElementById('pv').textContent=pw.value;
+function step(){buf=BG.slice();S[sc].d(f);let o=buf;if(tr<TR)o=compose(pv,buf,tr,dir);last=o;draw(o);
+ if(paused)return;tr++;f++;
+ if(S[sc].n&&f>=S[sc].n){if(fijo){f=0;tr=TR}else NX[sc]()}
+ else if(au.checked&&!S[sc].n&&f==18){
+  if(sc=='coin')A.coin();else if(sc=='diff')Math.random()<.4?A.mv(1):A.ok();
+  else if(sc=='ask'){pw.value=25+Math.floor(Math.random()*76);pw.oninput();A.kick()}}}
+setInterval(step,83);step();
+const bar=document.getElementById('b');
+const mk=(t,fn)=>{const e=document.createElement('button');e.textContent=t;e.onclick=()=>fn(e);bar.appendChild(e)};
+document.getElementById('ver').onchange=e=>ver(e.target.value);
+mk('Insertar ficha',A.coin);mk('◀',()=>A.mv(-1));mk('▶',()=>A.mv(1));mk('Aceptar',A.ok);mk('Patear',A.kick);
+mk('Pausar',e=>{paused=!paused;e.textContent=paused?'Reanudar':'Pausar'});
+</script></body></html>
